@@ -1,0 +1,4 @@
+{
+    "clangd.enabled": false,
+    "C_Cpp.intelliSenseEngine": "PlatformIO"
+}
