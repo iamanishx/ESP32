@@ -113,7 +113,7 @@ try {
   logger.warn("MQTT not available, commands will not be delivered:", err);
 }
 
-Deno.serve({ port: config.port }, (req) => {
+Deno.serve({ port: config.port, hostname: "0.0.0.0" }, (req) => {
   return handleRequest(req).catch((err) => {
     logger.error("Unhandled error:", err);
     return jsonResponse(500, { error: "Internal server error" });
