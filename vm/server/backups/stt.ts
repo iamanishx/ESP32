@@ -4,7 +4,7 @@ export async function transcribeAudio(audioBuffer: Uint8Array): Promise<string> 
   const formData = new FormData();
   const blob = new Blob([audioBuffer.buffer as ArrayBuffer], { type: "audio/wav" });
   formData.append("file", blob, "audio.wav");
-  formData.append("model", "whisper-1");
+  formData.append("model", "stepfun/step-3.5-flash:free");
   formData.append("language", config.transcribeLanguage);
   formData.append("response_format", "text");
 
@@ -24,5 +24,6 @@ export async function transcribeAudio(audioBuffer: Uint8Array): Promise<string> 
   }
 
   const text = await resp.text();
+  console.log(`[STT] Transcription result: ${text.trim()}`);
   return text.trim();
 }
