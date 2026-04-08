@@ -4,8 +4,22 @@
 #include <PubSubClient.h>
 #include <driver/i2s.h>
 #include <ArduinoJson.h>
+#include <Adafruit_NeoPixel.h>
 
-// ===== Config =====
+#define RGB_PIN   21
+#define RGB_COUNT 1
+Adafruit_NeoPixel rgb(RGB_COUNT, RGB_PIN, NEO_GRB + NEO_KHZ800);
+
+void setRGB(uint8_t r, uint8_t g, uint8_t b) {
+  rgb.setPixelColor(0, rgb.Color(r, g, b));
+  rgb.show();
+}
+void rgbOff()   { setRGB(0,   0,   0);   }
+void rgbRed()   { setRGB(255, 0,   0);   }
+void rgbGreen() { setRGB(0,   255, 0);   }
+void rgbBlue()  { setRGB(0,   0,   255); }
+void rgbYellow(){ setRGB(255, 200, 0);   }
+
 const char* WIFI_SSID = "Manish’s iPhone";
 const char* WIFI_PASS = "manish07";
 
@@ -18,15 +32,13 @@ const int   MQTT_PORT = 1883;
 const char* MQTT_TOPIC_CMD = "home/esp32-livingroom-01/cmd";
 const char* MQTT_TOPIC_ACK = "home/esp32-livingroom-01/ack";
 
-// ===== Pins =====
 #define BUTTON_PIN    4
 #define RELAY_1       10
 #define RELAY_2       11
 #define RELAY_3       12
 #define RELAY_4       13
-#define STATUS_LED    21
+// STATUS_LED removed - RGB on GPIO21 handled by NeoPixel
 
-// ===== I2S Mic (INMP441) =====
 #define I2S_WS        1
 #define I2S_SCK       2
 #define I2S_SD        3
@@ -34,7 +46,6 @@ const char* MQTT_TOPIC_ACK = "home/esp32-livingroom-01/ack";
 #define SAMPLE_RATE   16000
 #define BUF_SAMPLES   1024
 
-// ===== Globals =====
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
 int32_t  i2sRawBuf[BUF_SAMPLES];   // 32-bit read buffer
@@ -47,10 +58,8 @@ bool wifiConnected = false;
 bool mqttConnected = false;
 unsigned long lastMqttRetry = 0;
 
-// ===== Forward declarations =====
 void mqttCallback(char* topic, byte* payload, unsigned int length);
 
-// ===== I2S Setup =====
 void setupI2S() {
   Serial.println("[I2S] Configuring INMP441 mic...");
 
@@ -90,7 +99,6 @@ void setupI2S() {
   Serial.println("[I2S] OK: WS=GPIO1, SCK=GPIO2, SD=GPIO3");
 }
 
-// ===== WiFi Setup =====
 void setupWiFi() {
   Serial.printf("[WIFI] Connecting to '%s'...\n", WIFI_SSID);
   WiFi.mode(WIFI_STA);
@@ -114,7 +122,6 @@ void setupWiFi() {
   }
 }
 
-// ===== MQTT Setup =====
 void setupMQTT() {
   Serial.printf("[MQTT] Broker: %s:%d\n", MQTT_HOST, MQTT_PORT);
   mqttClient.setServer(MQTT_HOST, MQTT_PORT);
@@ -150,7 +157,6 @@ void tryMqttConnect() {
   }
 }
 
-// ===== MQTT Callback =====
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
   String msg;
   for (unsigned int i = 0; i < length; i++) {
@@ -174,6 +180,10 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     digitalWrite(relayPin, state);
     Serial.printf("[RELAY] Relay %d (GPIO %d) set to %s\n", relay, relayPin, state == 0 ? "ON" : "OFF");
 
+    if (state == 0) rgbGreen(); else rgbRed();
+    delay(1000);
+    rgbOff();
+
     JsonDocument ack;
     ack["id"] = cmdId;
     ack["ok"] = true;
@@ -188,7 +198,6 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   }
 }
 
-// ===== Button ISR =====
 void IRAM_ATTR buttonISR() {
   static unsigned long lastInterrupt = 0;
   unsigned long now = millis();
@@ -198,7 +207,6 @@ void IRAM_ATTR buttonISR() {
   }
 }
 
-// ===== Upload Audio =====
 bool uploadAudio() {
   if (!wifiConnected) {
     Serial.println("[UPLOAD] No WiFi, skipping");
@@ -222,7 +230,6 @@ bool uploadAudio() {
   return httpResponse == 202;
 }
 
-// ===== Setup =====
 void setup() {
   Serial.begin(115200);
   delay(1000);
@@ -234,7 +241,12 @@ void setup() {
   Serial.printf("MQTT: %s:%d\n", MQTT_HOST, MQTT_PORT);
   Serial.println("-----------------------------");
 
-  // Pin setup
+  rgb.begin();
+  rgb.setBrightness(30);
+  rgbBlue();
+  delay(300);
+  rgbOff();
+
   Serial.println("[GPIO] Configuring pins...");
   pinMode(BUTTON_PIN, INPUT_PULLUP);
   pinMode(RELAY_1, OUTPUT);
@@ -242,7 +254,6 @@ void setup() {
   pinMode(RELAY_3, OUTPUT);
   pinMode(RELAY_4, OUTPUT);
 
-  // All relays OFF (active LOW = HIGH is OFF)
   digitalWrite(RELAY_1, HIGH);
   digitalWrite(RELAY_2, HIGH);
   digitalWrite(RELAY_3, HIGH);
@@ -250,10 +261,8 @@ void setup() {
   Serial.println("[GPIO] Relays: OFF (GPIO 10-13)");
   Serial.println("[GPIO] Button: GPIO 4");
 
-  // Button interrupt
   attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), buttonISR, FALLING);
 
-  // Audio buffer - force internal SRAM (not PSRAM)
   Serial.printf("[MEM] Allocating %d bytes for audio buffer...\n", audioMaxSamples * sizeof(int16_t));
   audioBuffer = (int16_t*)heap_caps_malloc(audioMaxSamples * sizeof(int16_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
   if (!audioBuffer) {
@@ -263,13 +272,10 @@ void setup() {
   memset(audioBuffer, 0, audioMaxSamples * sizeof(int16_t));
   Serial.printf("[MEM] Audio buffer OK at address: %p\n", audioBuffer);
 
-  // I2S
   setupI2S();
 
-  // WiFi
   setupWiFi();
 
-  // MQTT
   setupMQTT();
 
   Serial.println("=============================");
@@ -277,9 +283,7 @@ void setup() {
   Serial.println("=============================");
 }
 
-// ===== Loop =====
 void loop() {
-  // Reconnect WiFi if lost
   if (WiFi.status() != WL_CONNECTED) {
     if (wifiConnected) {
       Serial.println("[WIFI] Connection lost! Reconnecting...");
@@ -293,21 +297,18 @@ void loop() {
     Serial.printf("[WIFI] Reconnected! IP: %s\n", WiFi.localIP().toString().c_str());
   }
 
-  // MQTT keep alive (non-blocking)
   if (!mqttClient.connected()) {
     mqttConnected = false;
     tryMqttConnect();
   }
   mqttClient.loop();
 
-  // Check serial for 'r' command to trigger recording
   if (Serial.available()) {
     char c = Serial.read();
     if (c == 'r' || c == 'R') {
       Serial.println("[CMD] Record triggered via serial");
       buttonPressed = true;
     } else if (c == 't' || c == 'T') {
-      // Mic test: read 10 samples and print
       Serial.println("[TEST] Reading mic samples...");
       int16_t testBuf[10];
       size_t bytesRead = 0;
@@ -333,7 +334,6 @@ void loop() {
     }
   }
 
-  // Button pressed: record and upload
   if (buttonPressed) {
     buttonPressed = false;
     recording = true;
@@ -347,10 +347,14 @@ void loop() {
       // Read 32-bit samples (INMP441 outputs 24-bit left-aligned in 32-bit frame)
       i2s_read(I2S_PORT, i2sRawBuf, BUF_SAMPLES * sizeof(int32_t), &bytesRead, portMAX_DELAY);
       size_t samplesRead = bytesRead / sizeof(int32_t);
-      // Shift >>14: INMP441 is 18-bit effective, left-aligned in 32-bit
-      // >>14 scales correctly to 16-bit without noise amplification
+      // >>11 is a balance between noise floor and signal level
+      // Apply simple DC offset removal to reduce low-frequency noise
+      static int32_t dcOffset = 0;
       for (size_t i = 0; i < samplesRead && audioSamples < audioMaxSamples; i++) {
-        audioBuffer[audioSamples++] = (int16_t)(i2sRawBuf[i] >> 14);
+        // Remove DC offset (high-pass filter)
+        dcOffset = dcOffset + ((i2sRawBuf[i] - dcOffset) >> 8);
+        int32_t filtered = i2sRawBuf[i] - dcOffset;
+        audioBuffer[audioSamples++] = (int16_t)(filtered >> 13);
       }
       if (audioSamples >= audioMaxSamples) break;
     }
@@ -359,7 +363,6 @@ void loop() {
     float duration = (float)audioSamples / SAMPLE_RATE;
     Serial.printf("[REC] Done: %d samples (%.1fs)\n", audioSamples, duration);
 
-    // Print first 10 samples for debug
     Serial.print("[REC] First samples: ");
     for (int i = 0; i < 10 && i < (int)audioSamples; i++) {
       Serial.printf("%d ", audioBuffer[i]);

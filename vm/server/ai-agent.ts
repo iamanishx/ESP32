@@ -133,7 +133,7 @@ const tools = {
     },
   }),
   set_fan: tool({
-    description: "Turn a fan on or off in a specific room",
+    description: "Turn a fan on or off in a specific room deafult is living_room",
     inputSchema: z.object({
       room: z.string().describe("Room name: living_room"),
       state: z.enum(["on", "off"]).describe("on or off"),
