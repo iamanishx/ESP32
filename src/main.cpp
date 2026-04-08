@@ -24,7 +24,7 @@ const char* MQTT_TOPIC_ACK = "home/esp32-livingroom-01/ack";
 #define RELAY_2       11
 #define RELAY_3       12
 #define RELAY_4       13
-#define STATUS_LED    21  // RGB LED on OceanLabz S3 Mini
+#define STATUS_LED    21
 
 // ===== I2S Mic (INMP441) =====
 #define I2S_WS        1
@@ -37,9 +37,10 @@ const char* MQTT_TOPIC_ACK = "home/esp32-livingroom-01/ack";
 // ===== Globals =====
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
-int16_t* audioBuffer = nullptr;
+int32_t  i2sRawBuf[BUF_SAMPLES];   // 32-bit read buffer
+int16_t* audioBuffer = nullptr;     // 16-bit output buffer
 size_t audioSamples = 0;
-size_t audioMaxSamples = 16000 * 3; // 3 seconds to fit in internal SRAM
+size_t audioMaxSamples = 16000 * 3;
 volatile bool recording = false;
 volatile bool buttonPressed = false;
 bool wifiConnected = false;
@@ -56,9 +57,9 @@ void setupI2S() {
   i2s_config_t i2sConfig = {
     .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX),
     .sample_rate = SAMPLE_RATE,
-    .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
+    .bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT,
     .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
-    .communication_format = I2S_COMM_FORMAT_STAND_I2S,
+    .communication_format = I2S_COMM_FORMAT_I2S,
     .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
     .dma_buf_count = 8,
     .dma_buf_len = BUF_SAMPLES,
@@ -343,10 +344,14 @@ void loop() {
 
     while (recording && (millis() - startTime < 5000)) {
       size_t bytesRead = 0;
-      i2s_read(I2S_PORT, &audioBuffer[audioSamples], BUF_SAMPLES * sizeof(int16_t), &bytesRead, portMAX_DELAY);
-      size_t samplesRead = bytesRead / sizeof(int16_t);
-      audioSamples += samplesRead;
-
+      // Read 32-bit samples (INMP441 outputs 24-bit left-aligned in 32-bit frame)
+      i2s_read(I2S_PORT, i2sRawBuf, BUF_SAMPLES * sizeof(int32_t), &bytesRead, portMAX_DELAY);
+      size_t samplesRead = bytesRead / sizeof(int32_t);
+      // Shift >>14: INMP441 is 18-bit effective, left-aligned in 32-bit
+      // >>14 scales correctly to 16-bit without noise amplification
+      for (size_t i = 0; i < samplesRead && audioSamples < audioMaxSamples; i++) {
+        audioBuffer[audioSamples++] = (int16_t)(i2sRawBuf[i] >> 14);
+      }
       if (audioSamples >= audioMaxSamples) break;
     }
 

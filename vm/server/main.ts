@@ -13,6 +13,29 @@ function jsonResponse(status: number, body: Record<string, unknown>): Response {
   });
 }
 
+function addWavHeader(pcm: Uint8Array, sampleRate = 16000, channels = 1, bitsPerSample = 16): Uint8Array {
+  const dataSize = pcm.length;
+  const header = new ArrayBuffer(44);
+  const v = new DataView(header);
+  const w = (o: number, s: string) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  w(0, "RIFF"); v.setUint32(4, 36 + dataSize, true); w(8, "WAVE"); w(12, "fmt ");
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, channels, true);
+  v.setUint32(24, sampleRate, true); v.setUint32(28, sampleRate * channels * bitsPerSample / 8, true);
+  v.setUint16(32, channels * bitsPerSample / 8, true); v.setUint16(34, bitsPerSample, true);
+  w(36, "data"); v.setUint32(40, dataSize, true);
+  const wav = new Uint8Array(44 + dataSize);
+  wav.set(new Uint8Array(header)); wav.set(pcm, 44);
+  return wav;
+}
+
+async function saveAudioOnly(audioBuffer: Uint8Array, requestId: string): Promise<string> {
+  await Deno.mkdir(config.audioSavePath, { recursive: true });
+  const filename = `${config.audioSavePath}/${requestId}.wav`;
+  const wav = addWavHeader(audioBuffer);
+  await Deno.writeFile(filename, wav);
+  return filename;
+}
+
 async function handleRequest(req: Request): Promise<Response> {
   const url = new URL(req.url);
   const method = req.method;
@@ -78,22 +101,22 @@ async function handleRequest(req: Request): Promise<Response> {
     // Process in background
     (async () => {
       try {
-        // Single step: send audio directly to Gemini (STT + Intent in one call)
         const t0 = Date.now();
-        logger.info(`[AI] Sending audio directly to Gemini for transcription + intent...`);
-        const result = await processAudioIntent(audioBuffer, deviceId);
-        const aiTotalMs = Date.now() - t0;
-        logger.info(`[AI] Done in ${aiTotalMs}ms`);
-        logger.info(`[AI] Model: ${result.model}`);
-        logger.info(`[AI] Response: "${result.responseText}"`);
-        if (result.toolCalls.length > 0) {
-          logger.info(`[AI] Tool calls: ${result.toolCalls.join(", ")}`);
-        } else {
-          logger.info(`[AI] No tool calls made`);
-        }
 
-        logger.info(`[DONE] Request ${requestId} completed in ${aiTotalMs}ms`);
-        logger.info(`[DONE] -------- End ${requestId} --------`);
+        // Save audio for debugging
+        const filename = await saveAudioOnly(audioBuffer, requestId);
+        logger.info(`[AUDIO] Saved to ${filename} - play with: ffplay "${filename}"`);
+
+        // Step 1: Voxtral ASR (DeepInfra) → transcript
+        // Step 2: StepFun Step-3.5-Flash (DeepInfra) → intent + tool calling
+        logger.info(`[AI] Starting pipeline...`);
+        const result = await processAudioIntent(audioBuffer, deviceId);
+
+        const totalMs = Date.now() - t0;
+        logger.info(`[DONE] ${requestId} completed in ${totalMs}ms`);
+        logger.info(`[DONE] Transcript: "${result.transcript}"`);
+        logger.info(`[DONE] Response: "${result.responseText}"`);
+        logger.info(`[DONE] Tools: ${result.toolCalls.join(", ") || "none"}`);
 
         requestLog.set(requestId, {
           deviceId,
@@ -102,7 +125,7 @@ async function handleRequest(req: Request): Promise<Response> {
           responseText: result.responseText,
           toolCalls: result.toolCalls,
           model: result.model,
-          totalMs: aiTotalMs,
+          totalMs,
         });
       } catch (err) {
         logger.error(`[ERR] Pipeline failed for ${requestId}:`, err);
@@ -149,13 +172,13 @@ async function handleRequest(req: Request): Promise<Response> {
 
 // ===== Startup =====
 logger.info("========================================");
-logger.info("  Home Voice Assistant Server v1.0");
+logger.info("  Home Voice Assistant - FULL PIPELINE");
 logger.info("========================================");
-logger.info(`Port:           ${config.port}`);
-logger.info(`Primary model:  ${config.primaryModelId}`);
-logger.info(`Fallback model: ${config.fallbackModelId}`);
-logger.info(`Device token:   ${config.deviceToken.slice(0, 8)}...`);
-logger.info(`MQTT broker:    ${config.mqttUrl}`);
+logger.info(`Port:         ${config.port}`);
+logger.info(`Device token: ${config.deviceToken.slice(0, 8)}...`);
+logger.info(`MQTT broker:  ${config.mqttUrl}`);
+logger.info(`STT:          Voxtral-Small-24B (DeepInfra ASR)`);
+logger.info(`LLM:          stepfun-ai/Step-3.5-Flash (DeepInfra)`);
 logger.info("----------------------------------------");
 
 try {

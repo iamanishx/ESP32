@@ -12,7 +12,8 @@ const voxtral = createOpenAICompatible({
   apiKey: config.deepInfraApiKey,
 });
 
-const VOXTRAL_MODEL = "mistralai/Voxtral-Small-24B-2507";
+const VOXTRAL_ASR = "mistralai/Voxtral-Mini-3B-2507"; // STT via ASR endpoint
+const LLM_MODEL = "stepfun-ai/Step-3.5-Flash";           // LLM via chat endpoint
 const homeInventory = getInventorySummary();
 
 function addWavHeader(pcmData: Uint8Array, sampleRate = 16000, channels = 1, bitsPerSample = 16): Uint8Array {
@@ -59,13 +60,16 @@ async function saveAudioFile(audioBuffer: Uint8Array): Promise<string> {
 }
 
 async function transcribeWithVoxtral(audioBuffer: Uint8Array): Promise<string> {
+  // Add WAV header - ASR endpoint needs proper WAV format, not raw PCM
+  const wavBuffer = addWavHeader(audioBuffer);
+
   const formData = new FormData();
-  const blob = new Blob([audioBuffer.buffer as ArrayBuffer], { type: "audio/wav" });
+  const blob = new Blob([wavBuffer.buffer as ArrayBuffer], { type: "audio/wav" });
   formData.append("audio", blob, "audio.wav");
 
-  logger.info(`[STT] Sending audio to Voxtral ASR...`);
+  logger.info(`[STT] Sending ${wavBuffer.length} bytes to Voxtral Mini ASR...`);
   const resp = await fetch(
-    "https://api.deepinfra.com/v1/inference/mistralai/Voxtral-Small-24B-2507",
+    "https://api.deepinfra.com/v1/inference/mistralai/Voxtral-Mini-3B-2507",
     {
       method: "POST",
       headers: {
@@ -162,8 +166,8 @@ export interface VoiceIntentResult {
 }
 
 // ===== Main Pipeline =====
-// Step 1: DeepInfra Voxtral ASR endpoint → transcript
-// Step 2: DeepInfra Voxtral chat endpoint + tools → relay command
+// Step 1: Voxtral ASR (DeepInfra ASR endpoint) → transcript
+// Step 2: StepFun Step-3.5-Flash (DeepInfra chat endpoint) + tools → relay command
 export async function processAudioIntent(
   audioBuffer: Uint8Array,
   deviceId: string,
@@ -187,16 +191,15 @@ export async function processAudioIntent(
       transcript: "",
       responseText: "Sorry, I couldn't hear that clearly.",
       toolCalls: [],
-      model: VOXTRAL_MODEL,
+      model: `${VOXTRAL_ASR} + ${LLM_MODEL}`,
       latencyMs: Date.now() - start,
     };
   }
 
-  // Step 2: Voxtral chat + tool calling
   logger.info(`[AI] Intent: "${transcript}"`);
   const t1 = Date.now();
   const result = await generateText({
-    model: voxtral(VOXTRAL_MODEL),
+    model: voxtral(LLM_MODEL),
     system: systemPrompt,
     prompt: `User said: "${transcript}"`,
     tools,
@@ -219,7 +222,7 @@ export async function processAudioIntent(
     transcript,
     responseText: result.text,
     toolCalls,
-    model: VOXTRAL_MODEL,
+    model: `${VOXTRAL_ASR} + ${LLM_MODEL}`,
     latencyMs,
   };
 }
@@ -234,7 +237,7 @@ export async function processVoiceIntent(
   logger.info(`[AI] Text intent: "${transcript}" from ${deviceId}`);
 
   const result = await generateText({
-    model: voxtral(VOXTRAL_MODEL),
+    model: voxtral(LLM_MODEL),
     system: systemPrompt,
     prompt: `User said: "${transcript}"`,
     tools,
@@ -252,5 +255,5 @@ export async function processVoiceIntent(
   const latencyMs = Date.now() - start;
   logger.info(`[AI] Response: "${result.text}" | ${latencyMs}ms`);
 
-  return { transcript, responseText: result.text, toolCalls, model: VOXTRAL_MODEL, latencyMs };
+  return { transcript, responseText: result.text, toolCalls, model: LLM_MODEL, latencyMs };
 }
