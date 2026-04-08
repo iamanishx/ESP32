@@ -8,11 +8,11 @@
 const char* WIFI_SSID = "Q7A-5G";
 const char* WIFI_PASS = "iitbbsr";
 
-const char* SERVER_URL = "https://:8080";
+const char* SERVER_URL = "http://172.60.3.80:8080";
 const char* DEVICE_TOKEN = "dev-token-change-me";
 const char* DEVICE_ID = "esp32-livingroom-01";
 
-const char* MQTT_HOST = "your-hetzner-vps-ip";
+const char* MQTT_HOST = "172.60.3.80";
 const int   MQTT_PORT = 1883;
 const char* MQTT_TOPIC_CMD = "home/esp32-livingroom-01/cmd";
 const char* MQTT_TOPIC_ACK = "home/esp32-livingroom-01/ack";
